@@ -45,7 +45,7 @@ p{margin:0 0 14px;} strong{font-weight:620;} hr{display:none;}
 @media (max-width:700px){ .flow{grid-template-columns:1fr;} .arrow{transform:rotate(90deg); justify-self:center;} }
 .funnel{display:grid; gap:8px;}
 .fn-row{display:grid; grid-template-columns:1fr 1fr; gap:12px; align-items:center;}
-.fn-bar{background:var(--s1); color:#fff; border-radius:4px; padding:7px 10px; font-weight:600; font-size:14px; min-width:9em; justify-self:end;}
+.fn-bar{box-sizing:border-box; max-width:100%; background:var(--s1); color:#fff; border-radius:4px; padding:7px 10px; font-weight:600; font-size:14px; min-width:9em; justify-self:end;}
 .fn-row:last-child .fn-bar{background:var(--s2);}
 .fn-l{font-size:13.5px; line-height:1.35;} .fn-l span{display:block; color:var(--muted); font-size:12.5px;}
 .table-wrap{overflow-x:auto;}
