@@ -21,6 +21,12 @@ MD = ROOT / "report" / "case.md"
 OUT = ROOT / "index.html"
 REPO = "https://github.com/massimo-pazzi/b2b-value-case"
 FNS_URL = "https://www.consultant.ru/document/cons_doc_LAW_55729/0e9f3c6aeb49362ca20996710a02f80c375b0ef4/"
+SALARY_URL = "https://moskva.gorodrabot.ru/salaries/menedzher-po-prodazham?y=2025"
+INSURANCE_URL = "https://www.nalog.gov.ru/rn77/taxation/insprem/"
+# Публичный дашборд и чарты в Yandex DataLens (домен datalens.yandex разрешает встраивание).
+DL = "https://datalens.yandex/"
+DL_DASH = DL + "kpjn9qs3sice3"
+DL_CHARTS = {"two_views": "7c69qvvq7bl4q", "price": "w1vym3y2qwfuf"}
 
 
 def esc(t):
@@ -87,10 +93,15 @@ def fig_alternatives():
             ("Ответ за сутки ночью, в выходные, в отпуск", N, P, N, Y),
             ("В CRM попадают только запросы", "—", "—", N, Y),
             ("Масштабируется с ростом потока", N, N + " — найм линейный", Y, Y),
-            ("Затраты", "скрытые: упущенные сделки", "зарплата каждый месяц", "низкие, но клиент уже пробовал", "проект + сопровождение")]
+            ("Затраты в год", "скрытые: упущенные сделки", f"≈ {mln(model.manager_cost())} млн ₽ на одного",
+             "низкие, но клиент уже пробовал", f"≈ {mln(COST3 / 3, 2)} млн ₽ в среднем за 3 года")]
     return figure("Четыре варианта, из которых выбирал клиент",
                   table(["", "Ничего не делать", "Нанять ещё менеджера", "Почта → CRM без фильтра", "<strong>ИИ-фильтр</strong>"],
-                        rows, "matrix"))
+                        rows, "matrix"),
+                  f'Менеджер — средняя зарплата менеджера по продажам в Москве за 2025 год по вакансиям '
+                  f'(<a href="{SALARY_URL}" target="_blank" rel="noopener">ГородРабот.ру</a>, '
+                  f'{rub(model.MANAGER_SALARY_MONTH)} ₽ в месяц) плюс 30% <a href="{INSURANCE_URL}" target="_blank" '
+                  f'rel="noopener">страховых взносов</a>, без рабочего места.')
 
 
 def fig_process():
@@ -110,6 +121,48 @@ def fig_assumptions():
             ("Рост конверсии за счёт ответа за 5 минут", f"{mln(model.EXTRA_REVENUE, 0)} млн ₽ в год", "экспертная оценка"),
             ("Экономия времени менеджеров", f"{rub(model.MANAGER_SAVING)} ₽ в год", "экспертная оценка, ~2 000 часов в год")]
     return figure("Допущения модели", table(["Показатель", "Значение", "Откуда"], rows))
+
+
+def fig_decomposition():
+    lr, m = model.lost_revenue(BASE), model.NET_MARGIN
+    rows = [("Сохранённые сделки", f"{mln(lr)} млн ₽", f"{mln(lr * m, 2)} млн ₽", "34 млн выручки × 3,85%"),
+            ("Ответ клиенту за 5 минут: рост конверсии", f"{mln(model.EXTRA_REVENUE)} млн ₽",
+             f"{mln(model.EXTRA_REVENUE * m, 2)} млн ₽", "тоже выручка — та же маржа"),
+            ("Время менеджеров", f"{mln(model.MANAGER_SAVING)} млн ₽", f"{mln(model.MANAGER_SAVING, 2)} млн ₽",
+             "экономия затрат — без маржи"),
+            ("Репутация и NPS", f"{mln(model.NPS_BENEFIT)} млн ₽", "—", "не измерить — не учитываем"),
+            ("<strong>Итого в год</strong>", f"<strong>{mln(model.benefits(BASE))} млн ₽</strong>",
+             f"<strong>{mln(model.benefits(BASE, m), 2)} млн ₽</strong>", "")]
+    return figure("Годовой эффект в базовом сценарии: из чего он складывается",
+                  table(["Поток", "По выручке, как в предложении", "По марже отрасли", "Почему так"], rows, "num txtlast"),
+                  f"Затраты первого года — {mln(YEAR1, 2)} млн ₽. Отсюда окупаемость: "
+                  f"{pct(model.payback(BASE)['Окупаемость, мес.'])} мес. по выручке и "
+                  f"{pct(model.payback(BASE, m)['Окупаемость, мес.'])} мес. по марже.")
+
+
+def fig_sensitivity():
+    head = ["Конверсия запроса в сделку"] + [f"теряется {int(k * 100)}% пропущенных" for k in model.LOST_SHARES]
+    rows = []
+    for conv in model.CONVERSIONS:
+        cells = []
+        for k in model.LOST_SHARES:
+            t = pct(model.threshold_margin(BASE, lost_share=k, conversion=conv) * 100)
+            cells.append(f"<strong>{t}%</strong>" if (conv, k) == (model.CONVERSION, 1.0) else f"{t}%")
+        rows.append([f"{int(conv * 100)}%"] + cells)
+    return figure("Какую долю чека нужно терять с упущенной сделки, чтобы проект окупился за год: базовый сценарий, 2% пропусков",
+                  table(head, rows, "num"),
+                  "Жирным — допущения предложения: конверсия 17%, все пропущенные запросы потеряны. "
+                  "Чем меньше реальные потери, тем выше порог. Расчёт — data/sensitivity.csv.")
+
+
+def fig_core():
+    rows = [("Логика доказательства: цена бездействия → две картины ценности → пороговая маржа", "Входные допущения: поток, чек, конверсия, доля пропусков"),
+            ("Модель окупаемости и сценарии (scripts/model.py)", "Сценарии и порог под экономику конкретного клиента"),
+            ("Структура предложения под четырёх читателей", "Интеграции: конкретная почта и CRM клиента"),
+            ("Аргументы против «ничего не делать» и «почта → CRM без фильтра»", "Обучение модели на архиве писем клиента и подбор порога"),
+            ("Асимметрия цены ошибок как принцип настройки", "Развёртывание: свой контур или облако подрядчика")]
+    return figure("Что может тиражироваться, а что кастомная разработка",
+                  table(["Тиражируется", "Кастомная разработка"], rows))
 
 
 def fig_two_views():
@@ -164,12 +217,18 @@ def fig_threshold():
     svg = f'<div class="chart-scroll"><svg viewBox="0 0 {W} {H + 10}" role="img" aria-label="Срок окупаемости в зависимости от маржи">{"".join(out)}</svg></div>'
     t = model.threshold_margin(BASE) * 100
     return figure("Сколько месяцев окупается проект в зависимости от того, какую долю чека клиент теряет с упущенной сделки",
-                  svg, f"Точки на линии «окупаемость за год» — пороговая маржа каждого сценария. Базовый сценарий: {pct(t)}%.")
+                  svg, "Как читать: каждая линия — один сценарий доли пропущенных запросов. По горизонтали — какую долю "
+                  "стоимости упущенной сделки компания теряет в деньгах, то есть её маржа с этой сделки; по вертикали — "
+                  "за сколько месяцев при такой марже окупается проект. Чем выше маржа, тем дороже каждая потерянная "
+                  "сделка и тем быстрее окупаемость. Пунктир — окупаемость за год: точка, где линия его пересекает, — "
+                  "пороговая маржа сценария. Например, в базовом сценарии (2% пропусков) проект окупается за год, если "
+                  f"с упущенной сделки компания теряет хотя бы {pct(t)}% её стоимости. Вертикальная линия — чистая "
+                  "рентабельность воздушного транспорта по ФНС (3,85%): это нижняя граница, реальная потеря с рейса выше.")
 
 
 def fig_price():
-    tiles = [(f"{mln(DEV, 2)} млн ₽", "стоимость проекта, без НДС"),
-             (f"{DEV / model.AVG_CHECK:.0%}".replace("%", " %"), "одной средней сделки клиента"),
+    tiles = [(f"{mln(YEAR1, 2)} млн ₽", "бюджет первого года с резервом, без НДС"),
+             (f"{YEAR1 / model.AVG_CHECK:.0%}".replace("%", " %"), "одной средней сделки клиента"),
              (f"{sum(w for _, w, _ in model.STAGES)} недели", "от старта до сдачи"),
              ("50 / 50", "аванс и оплата после тестирования и акта")]
     kp = '<div class="kpis">' + "".join(
@@ -187,17 +246,24 @@ def fig_stakeholders():
             ("Финансовый директор", "Сколько это стоит и когда вернётся?", "Пороговая маржа, оплата этапами, резерв в бюджете"),
             ("ИТ", "Где живут данные и что нужно от нас?", "Развёртывание в своём контуре, требования к серверу, журнал операций"),
             ("Менеджеры", "Не станет ли больше работы?", "В CRM только запросы, задачи создаются сами, сортировки нет")]
-    return figure("Кому что продавали", table(["Кто", "Его вопрос", "Ответ в предложении"], rows))
+    return figure("Вопрос каждого участника решения и ответ в предложении", table(["Кто", "Его вопрос", "Ответ в предложении"], rows))
 
 
 def fig_sources():
     return (f'<ol class="sources"><li>ФНС России, «Рентабельность проданных товаров, продукции, работ, услуг и рентабельность '
             f'активов организаций по видам экономической деятельности» за 2024 год — <a href="{FNS_URL}" target="_blank" '
-            f'rel="noopener">КонсультантПлюс</a></li><li>Коммерческое предложение по проекту (не публикуется): допущения о '
+            f'rel="noopener">КонсультантПлюс</a></li>'
+            f'<li>Средняя зарплата менеджера по продажам в Москве за 2025 год по вакансиям — <a href="{SALARY_URL}" '
+            f'target="_blank" rel="noopener">ГородРабот.ру</a></li>'
+            f'<li>Тарифы страховых взносов — <a href="{INSURANCE_URL}" target="_blank" rel="noopener">ФНС России</a></li>'
+            f'<li>Открытая бухгалтерская отчётность клиента — для проверки масштаба модели (ссылка не приводится, '
+            f'чтобы не раскрывать клиента)</li>'
+            f'<li>Коммерческое предложение по проекту (не публикуется): допущения о '
             f'клиенте, состав работ, сроки и условия оплаты</li></ol>'
             f'<p class="note">Расчёт окупаемости и данные для графиков — <a href="{REPO}/blob/main/scripts/model.py" '
             f'target="_blank" rel="noopener">scripts/model.py</a> и <a href="{REPO}/tree/main/data" target="_blank" '
-            f'rel="noopener">data/</a>.</p>')
+            f'rel="noopener">data/</a>; интерактивные графики — <a href="{DL_DASH}" target="_blank" '
+            f'rel="noopener">дашборд в Yandex DataLens</a>.</p>')
 
 
 def author_block():
@@ -206,9 +272,28 @@ def author_block():
             '<span>Максим Поципух</span></div>')
 
 
+def dl_link(chart_id):
+    return (f'<p class="dl-link"><a href="{DL}{chart_id}" target="_blank" rel="noopener">'
+            f'Открыть интерактивно в DataLens ↗</a></p>')
+
+
+def dl_embed(chart_id, title, height, note):
+    src = f"{DL}{chart_id}?_embedded=1&_no_controls=1"
+    return (f'<figure class="chart live"><figcaption class="chart-title">{title}</figcaption>'
+            f'<iframe src="{src}" title="{esc(title)}" loading="lazy" style="height:{height}px"></iframe>'
+            f'<p class="note">{note} Если не загрузилось — '
+            f'<a href="{DL}{chart_id}" target="_blank" rel="noopener">откройте его в DataLens</a>.</p></figure>')
+
+
+# Живая вставка — там, где наведение даёт то, чего нет на статичном графике: точный срок для любой маржи.
+DL_EMBEDS = {"threshold": ("5a46bibknjyko", "Тот же расчёт в DataLens: маржа от 2 до 40%", 420,
+                           "Живой график: наведите на линию, чтобы увидеть срок окупаемости при любой марже; "
+                           "щелчок по сценарию в легенде скрывает его линию.")}
+
 FIGS = {"summary": fig_summary, "funnel": fig_funnel, "alternatives": fig_alternatives, "process": fig_process,
-        "assumptions": fig_assumptions, "two_views": fig_two_views, "threshold": fig_threshold, "price": fig_price,
-        "stakeholders": fig_stakeholders, "sources": fig_sources}
+        "assumptions": fig_assumptions, "decomposition": fig_decomposition, "sensitivity": fig_sensitivity,
+        "two_views": fig_two_views, "threshold": fig_threshold, "price": fig_price,
+        "stakeholders": fig_stakeholders, "core": fig_core, "sources": fig_sources}
 
 CSS = """
 :root{
@@ -277,6 +362,10 @@ th{font-weight:600; color:var(--ink-2); font-size:12.5px;}
 .kpis{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:12px;}
 .kpi{border:1px solid var(--rule); border-radius:6px; padding:12px 14px;}
 .kpi-v{font-size:1.4rem; font-weight:700; font-variant-numeric:tabular-nums;} .kpi-l{font-size:13px; color:var(--ink-2); margin-top:4px; line-height:1.4;}
+.num td:not(:first-child),.num th:not(:first-child){text-align:right; font-variant-numeric:tabular-nums;}
+.txtlast td:last-child,.txtlast th:last-child{text-align:left;}
+.dl-link{margin:-12px 0 22px; font-size:13.5px;}
+.chart.live iframe{display:block; width:100%; border:0; border-radius:4px; background:#fff;}
 .sources{font-size:14.5px; line-height:1.55; padding-left:1.5em;}
 @media (max-width:520px){ body{font-size:16px; padding-block:24px 48px;} .pair,.fn-row{grid-template-columns:1fr;} .fn-bar{justify-self:start;} }
 """
@@ -289,14 +378,19 @@ def main():
     for name, fn in FIGS.items():
         marker = f"<!-- fig:{name} -->"
         assert marker in html, f"нет места для блока {name}"
-        html = html.replace(marker, fn())
+        block = fn()
+        if name in DL_EMBEDS:
+            block += dl_embed(*DL_EMBEDS[name])
+        elif name in DL_CHARTS:
+            block += dl_link(DL_CHARTS[name])
+        html = html.replace(marker, block)
     page = f"""<!doctype html>
 <html lang="ru">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Два языка ценности</title>
-<meta name="description" content="Портфолио-кейс по стратегическому маркетингу: модель ценности и окупаемости ИИ-проекта для грузовой авиакомпании">
+<title>Окупаемость без маржи</title>
+<meta name="description" content="Портфолио-кейс: как обосновать окупаемость ИИ-проекта для грузовой авиакомпании, не зная маржи клиента, — сделать видимыми потери от бездействия и превратить ROI в неравенство, которое клиент проверяет сам">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -304,7 +398,7 @@ def main():
 </head>
 <body>
 <main class="page">
-<p class="eyebrow">Портфолио-кейс: стратегический маркетинг B2B · Максим Поципух · Октябрь 2026</p>
+<p class="eyebrow">Портфолио-кейс: обоснование стратегического проекта · Максим Поципух · Сентябрь 2025</p>
 {html}
 </main>
 </body>
